@@ -417,15 +417,15 @@ class TagColor(Filter):
     self.always_tags = args.always_tags
     c = console
 
-    self.last_used = [c.RED, c.GREEN, c.YELLOW, c.BLUE, c.MAGENTA, c.CYAN]
+    self.last_used = sorted(set(c.COLORS) - set([c.BLACK, c.GRAY, c.WHITE]))
 
     self.known_tags = {
-      'dalvikvm': c.WHITE,
-      'Process': c.WHITE,
-      'ActivityManager': c.WHITE,
-      'ActivityThread': c.WHITE,
+      'dalvikvm': c.GRAY,
+      'Process': c.GRAY,
+      'ActivityManager': c.GRAY,
+      'ActivityThread': c.GRAY,
       'AndroidRuntime': c.CYAN,
-      'jdwp': c.WHITE,
+      'jdwp': c.GRAY,
       'StrictMode': c.WHITE,
       'DEBUG': c.YELLOW,
     }
@@ -457,6 +457,11 @@ class TagColor(Filter):
   def filter(self, log_row):
     if not log_row: return None
 
+    if log_row == LogRow.RESET_TAG:
+      self.last_cgroup = None
+      self.last_cgroup_text = None
+      return None
+
     cgroup = str.join(' ', map(lambda l: log_row[l], self.cgroup_color))
     cgroup_text = str.join(' ', map(lambda l: log_row[l], self.cgroup_column))
 
@@ -464,11 +469,6 @@ class TagColor(Filter):
     if self.last_line == canon_line:
       return None
     self.last_line = canon_line
-
-    if log_row == LogRow.RESET_TAG:
-      self.last_cgroup = None
-      self.last_cgroup_text = None
-      return None
 
     linebuf = ''
 
@@ -525,15 +525,20 @@ class Console():
     except:
       pass
 
-  BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE = range(8)
+  DARKS = range(30, 38)
+  LIGHTS = range(90, 98)
+  COLORS = sorted(set(DARKS).union(set(LIGHTS)))
+
+  BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, GRAY = DARKS
+  DARK_GRAY, L_RED, L_GREEN, L_YELLOW, L_BLUE, L_MAGENTA, L_CYAN, WHITE = LIGHTS
 
   RESET = '\033[0m'
 
   @staticmethod
   def termcolor(fg=None, bg=None):
     codes = []
-    if fg is not None: codes.append('3%d' % fg)
-    if bg is not None: codes.append('10%d' % bg)
+    if fg is not None: codes.append('%d' % fg)
+    if bg is not None: codes.append('%d' % (bg + 10))
     return '\033[%sm' % ';'.join(codes) if codes else ''
 
   def colorize(self, message, fg=None, bg=None):
