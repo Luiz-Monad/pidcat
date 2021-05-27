@@ -67,7 +67,7 @@ def parse_args():
   parser.add_argument('-i', '--ignore-tag', dest='ignored_tag', action='append', help='Filter output by ignoring specified tag(s)')
   parser.add_argument('-a', '--all', dest='all', action='store_true', default=False, help='Print all log messages')
   #display
-  parser.add_argument('-w', '--group-width', metavar='N', dest='cgroup_width', type=int, default=23, help='Width of the group column')
+  parser.add_argument('-w', '--tag-width', metavar='N', dest='header_size', type=int, default=23, help='Width of the header column')
   parser.add_argument('-r', '--group-color', nargs='+', dest='cgroup_color', type=str, choices=['tag', 'pid', 'tid'], default=['tag'], help='Which column to group colors')
   parser.add_argument('-g', '--group', nargs='+', dest='cgroup_column', type=str, choices=['tag', 'pid', 'tid'], default=['tag'], help='Which column to display on group')
   parser.add_argument('-l', '--min-level', dest='min_level', type=str, choices=LOG_LEVELS+LOG_LEVELS.lower(), default='V', help='Minimum level to be displayed')
@@ -80,7 +80,6 @@ def parse_args():
   args.min_level = LOG_LEVELS_MAP[args.min_level.upper()]
   if len(args.activities) == 0:
     args.all = True
-  args.header_size = args.cgroup_width + 1 + 3 + 1 # space, level, space
   return args
 
 
@@ -92,8 +91,11 @@ class LogRow():
     self.tid = tid
     self.level = level
     self.tag = tag
+
   def __getitem__(cls, x):
     return getattr(cls, x)
+
+LogRow.RESET_TAG = LogRow(None, None, None, None, None)
 
 
 
@@ -298,12 +300,12 @@ class ProcessFilter(Filter):
         self.pids.add(s_pid)
         self.app_pid = s_pid
         self.process_created(s_package, s_target, s_pid, s_uid, s_gids)
-        return None # Ensure next log gets a color group printed
+        return LogRow.RESET_TAG # Ensure next log gets a color group printed
     dead_pid, dead_pname = m.parse_death(log_row.tag, log_row.message)
     if dead_pid:
       self.pids.remove(dead_pid)
       self.process_destroyed(dead_pid, dead_pname)
-      return None # Ensure next log gets a color group printed
+      return LogRow.RESET_TAG # Ensure next log gets a color group printed
     # Make sure the backtrace is printed after a native crash
     if log_row.tag == 'DEBUG':
       bt_line = BACKTRACE_LINE.match(log_row.message.lstrip())
@@ -366,17 +368,19 @@ class TagFilter(Filter):
     self.min_level = args.min_level
 
   @staticmethod
-  def tag_in_tags_regex(tag, tags):
+  def __tag_in_tags_regex(tag, tags):
     return any(re.match(t, tag.strip()) for t in map(str.strip, tags))
 
   def filter(self, log_row):
     if not log_row:
       return None
+    if log_row == LogRow.RESET_TAG:
+      return log_row
     if log_row.level in LOG_LEVELS_MAP and LOG_LEVELS_MAP[log_row.level] < self.min_level:
       return None
-    if self.ignored_tag and self.tag_in_tags_regex(log_row.tag, self.ignored_tag):
+    if self.ignored_tag and self.__tag_in_tags_regex(log_row.tag, self.ignored_tag):
       return None
-    if self.filter_tag and not self.tag_in_tags_regex(log_row.tag, self.filter_tag):
+    if self.filter_tag and not self.__tag_in_tags_regex(log_row.tag, self.filter_tag):
       return None
     return log_row
 
@@ -406,7 +410,7 @@ class ExtraLogColor(Filter):
 class TagColor(Filter):
   def __init__(self, console, args):
     self.console = console
-    self.cgroup_width = args.cgroup_width
+    self.header_size = args.header_size
     self.cgroup_color = args.cgroup_color
     self.cgroup_column = args.cgroup_column
     self.min_level = args.min_level
@@ -439,7 +443,7 @@ class TagColor(Filter):
     self.last_cgroup_text = None
     self.last_line = ''
 
-  def allocate_color(self, tag):
+  def __allocate_color(self, tag):
     # this will allocate a unique format for the given tag
     # since we dont have very many colors, we always keep track of the LRU
     if tag not in self.known_tags:
@@ -461,16 +465,21 @@ class TagColor(Filter):
       return None
     self.last_line = canon_line
 
+    if log_row == LogRow.RESET_TAG:
+      self.last_cgroup = None
+      self.last_cgroup_text = None
+      return None
+
     linebuf = ''
 
     # right-align tag title and allocate color if needed
-    w = self.cgroup_width
+    w = self.header_size - 5
     c = self.console
     if w > 0:
       if cgroup_text != self.last_cgroup_text or cgroup != self.last_cgroup or self.always_tags:
         self.last_cgroup = cgroup
         self.last_cgroup_text = cgroup_text
-        color = self.allocate_color(cgroup)
+        color = self.__allocate_color(cgroup)
         cgroup_text = cgroup_text[-w:].rjust(w)
         linebuf += c.colorize(cgroup_text, fg=color)
       else:
