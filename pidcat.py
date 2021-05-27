@@ -63,20 +63,20 @@ def parse_args():
   #filter
   parser.add_argument('activities', nargs='*', help='Application package name(s)')
   parser.add_argument('-n', '--current', dest='current_app', action='store_true', help='Filter logcat by current running app')
-  parser.add_argument('-t', '--tag', dest='tag', action='append', help='Filter output by specified tag(s)')
+  parser.add_argument('-t', '--tag', dest='filter_tag', action='append', help='Filter output by specified tag(s)')
   parser.add_argument('-i', '--ignore-tag', dest='ignored_tag', action='append', help='Filter output by ignoring specified tag(s)')
   parser.add_argument('-a', '--all', dest='all', action='store_true', default=False, help='Print all log messages')
   #display
   parser.add_argument('-w', '--group-width', metavar='N', dest='cgroup_width', type=int, default=23, help='Width of the group column')
-  parser.add_argument('-r', '--group-color', nargs='+', dest='cgroup_color', type=str, choices=['tag', 'pid', 'tid'], default='tag', help='Which column to group colors')
-  parser.add_argument('-g', '--group', nargs='+', dest='cgroup_column', type=str, choices=['tag', 'pid', 'tid'], default='tag', help='Which column to display on group')
+  parser.add_argument('-r', '--group-color', nargs='+', dest='cgroup_color', type=str, choices=['tag', 'pid', 'tid'], default=['tag'], help='Which column to group colors')
+  parser.add_argument('-g', '--group', nargs='+', dest='cgroup_column', type=str, choices=['tag', 'pid', 'tid'], default=['tag'], help='Which column to display on group')
   parser.add_argument('-l', '--min-level', dest='min_level', type=str, choices=LOG_LEVELS+LOG_LEVELS.lower(), default='V', help='Minimum level to be displayed')
   parser.add_argument('--color-gc', dest='color_gc', action='store_true', help='Color garbage collection')
   parser.add_argument('--always-display-tags', dest='always_tags', action='store_true', help='Always display the tag name')
   parser.add_argument('--hide-process', dest='hide_proc_msg', action='store_true', default=False, help='Hide process start/end messages')
   #default
   parser.add_argument('-v', '--version', action='version', version='%(prog)s ' + __version__, help='Print the version number and exit')
-  args = parser.parse_args(['installd:'])
+  args = parser.parse_args()
   args.min_level = LOG_LEVELS_MAP[args.min_level.upper()]
   if len(args.activities) == 0:
     args.all = True
@@ -92,6 +92,8 @@ class LogRow():
     self.tid = tid
     self.level = level
     self.tag = tag
+  def __getitem__(cls, x):
+    return getattr(cls, x)
 
 
 
@@ -157,7 +159,7 @@ class Adb():
   def readline(self):
     return self.adb.stdout.readline().decode('utf-8', 'replace').strip()
 
-  def pool(self):
+  def poll(self):
     while self.adb.poll() is None:
       try:
         line = self.readline()
@@ -271,7 +273,7 @@ class ProcessFilter(Filter):
   def __init__(self, matcher, args, procs):
     self.matcher = matcher
     self.all = args.all
-    self.pids = matcher.to_pid_set(procs)
+    self.pids = Adb.to_pid_set(procs)
     self.app_pid = None
     for (pid, name) in procs:
       self.process_exists(name, pid)
@@ -320,7 +322,7 @@ class ProcessDisplay(ProcessFilter):
     self.hide_proc_msg = args.hide_proc_msg
     self.header_size = args.header_size
     self.console = console
-    ProcessFilter.__init__(matcher, procs)
+    ProcessFilter.__init__(self, matcher, args, procs)
 
   def process_exists(self, proc, pid):
     if self.hide_proc_msg: return
@@ -328,7 +330,7 @@ class ProcessDisplay(ProcessFilter):
     hdr = self.header_size
     linebuf  = '\n'
     linebuf += c.colorize(' ' * (hdr - 1), bg=c.WHITE)
-    linebuf += c.indent_wrap('Process %s (PID: %s) exists' % (proc, pid), hdr)
+    linebuf += c.indent_wrap(' Process %s (PID: %s) exists' % (proc, pid), hdr)
     linebuf += '\n'
     c.write(linebuf)
 
@@ -338,7 +340,7 @@ class ProcessDisplay(ProcessFilter):
     hdr = self.header_size
     linebuf  = '\n'
     linebuf += c.colorize(' ' * (hdr - 1), bg=c.WHITE)
-    linebuf += c.indent_wrap('Process %s (PID: %s) created for %s' % (package, pid, target), hdr)
+    linebuf += c.indent_wrap(' Process %s (PID: %s) created for %s' % (package, pid, target), hdr)
     if (len(uid.strip()) > 0 or len(gids.strip()) > 0):
       linebuf += c.colorize(' ' * (hdr - 1), bg=c.WHITE)
       linebuf += '\n UID: %s   GIDs: %s' % (uid, gids)
@@ -351,7 +353,7 @@ class ProcessDisplay(ProcessFilter):
     hdr = self.header_size
     linebuf  = '\n'
     linebuf += c.colorize(' ' * (hdr - 1), bg=c.RED)
-    linebuf += c.indent_wrap('Process %s (PID: %s) ended' % (pname, pid), hdr)
+    linebuf += c.indent_wrap(' Process %s (PID: %s) ended' % (pname, pid), hdr)
     linebuf += '\n'
     c.write(linebuf)
 
@@ -462,15 +464,17 @@ class TagColor(Filter):
     linebuf = ''
 
     # right-align tag title and allocate color if needed
-    if self.cgroup_width > 0:
+    w = self.cgroup_width
+    c = self.console
+    if w > 0:
       if cgroup_text != self.last_cgroup_text or cgroup != self.last_cgroup or self.always_tags:
         self.last_cgroup = cgroup
         self.last_cgroup_text = cgroup_text
         color = self.allocate_color(cgroup)
-        cgroup_text = cgroup_text[-args.cgroup_width:].rjust(args.cgroup_width)
-        linebuf += self.colorize(cgroup_text, fg=color)
+        cgroup_text = cgroup_text[-w:].rjust(w)
+        linebuf += c.colorize(cgroup_text, fg=color)
       else:
-        linebuf += ' ' * args.cgroup_width
+        linebuf += ' ' * w
       linebuf += ' '
 
     # write out level colored edge
@@ -492,7 +496,7 @@ class LogDisplay(ProcessFilter):
   def filter(self, log_row):
     if not log_row: return
     c = self.console
-    message = log_row.tag + ' ' + c.indent(log_row.message, self.header_size)
+    message = log_row.tag + ' ' + c.indent_wrap(log_row.message, self.header_size)
     c.write(message)
 
 
@@ -549,29 +553,33 @@ class Console():
 
 
 
-args = parse_args()
-adb = Adb(args)
-if args.clear_logcat:
-  adb.clear_logcat()
-if args.current_app:
-  args.activities.append(adb.get_activities())
-processes = Matcher.filter_processes(args.activities)
-packages = Matcher.filter_packages(args.activities)
-procs = Adb.filter_pid(adb.get_processes(), processes)
-matcher = Matcher(Adb.to_pid_set(procs), args.all, processes, packages)
-console = Console()
-displayProcess = ProcessDisplay(matcher, console, args, procs)
-filterTag = TagFilter(console, args)
-colorTag = TagColor(console, args)
-colorExtra = ExtraLogColor(console, args)
-displayLog = LogDisplay(console, args)
+def run():
+  args = parse_args()
+  adb = Adb(args)
+  if args.clear_logcat:
+    adb.clear_logcat()
+  if args.current_app:
+    args.activities.append(adb.get_activities())
+  processes = Matcher.filter_processes(args.activities)
+  packages = Matcher.filter_packages(args.activities)
+  procs = Adb.filter_pid(adb.get_processes(), processes)
+  matcher = Matcher(Adb.to_pid_set(procs), args.all, processes, packages)
+  console = Console()
+  displayProcess = ProcessDisplay(matcher, console, args, procs)
+  filterTag = TagFilter(args)
+  colorTag = TagColor(console, args)
+  colorExtra = ExtraLogColor(console, args)
+  displayLog = LogDisplay(console, args)
 
-adb.open()
-while True:
-  log_row = adb.poll()
-  if not log_row: break
-  log_row = displayProcess.filter(log_row)
-  log_row = filterTag.filter(log_row)
-  log_row = colorTag.filter(log_row)
-  log_row = colorExtra.filter(log_row)
-  displayLog.filter(log_row)
+  adb.open()
+  while True:
+    log_row = adb.poll()
+    if not log_row: break
+    log_row = displayProcess.filter(log_row)
+    log_row = filterTag.filter(log_row)
+    log_row = colorTag.filter(log_row)
+    log_row = colorExtra.filter(log_row)
+    displayLog.filter(log_row)
+
+if __name__ == "__main__":
+  run()
