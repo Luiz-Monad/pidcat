@@ -197,8 +197,7 @@ class Adb():
 
 
 class Matcher():
-  def __init__(self, pids, all, processes, packages):
-    self.pids = pids
+  def __init__(self, all, processes, packages):
     self.all = all
     self.processes = processes
     self.packages = packages
@@ -219,19 +218,19 @@ class Matcher():
     if kill:
       pid = kill.group(1)
       package_line = kill.group(2)
-      if self.match_packages(package_line) and pid in self.pids:
+      if self.match_packages(package_line):
         return pid, package_line
     leave = PID_LEAVE.match(message)
     if leave:
       pid = leave.group(2)
       package_line = leave.group(1)
-      if self.match_packages(package_line) and pid in self.pids:
+      if self.match_packages(package_line):
         return pid, package_line
     death = PID_DEATH.match(message)
     if death:
       pid = death.group(2)
       package_line = death.group(1)
-      if self.match_packages(package_line) and pid in self.pids:
+      if self.match_packages(package_line):
         return pid, package_line
     return None, None
 
@@ -303,6 +302,8 @@ class ProcessFilter(Filter):
         return LogRow.RESET_TAG # Ensure next log gets a color group printed
     dead_pid, dead_pname = m.parse_death(log_row.tag, log_row.message)
     if dead_pid:
+      if dead_pid not in self.pids:
+          return None
       self.pids.remove(dead_pid)
       self.process_destroyed(dead_pid, dead_pname)
       return LogRow.RESET_TAG # Ensure next log gets a color group printed
@@ -431,7 +432,7 @@ class TagColor(Filter):
     }
 
     self.tag_types = {
-      'V': c.colorize(' V ', fg=c.WHITE, bg=c.BLACK),
+      'V': c.colorize(' V ', fg=c.WHITE, bg=c.DARK_GRAY),
       'D': c.colorize(' D ', fg=c.BLACK, bg=c.BLUE),
       'I': c.colorize(' I ', fg=c.BLACK, bg=c.GREEN),
       'W': c.colorize(' W ', fg=c.BLACK, bg=c.YELLOW),
@@ -576,9 +577,9 @@ def run():
     args.activities.append(adb.get_activities())
   processes = Matcher.filter_processes(args.activities)
   packages = Matcher.filter_packages(args.activities)
-  procs = Adb.filter_pid(adb.get_processes(), processes)
-  matcher = Matcher(Adb.to_pid_set(procs), args.all, processes, packages)
+  matcher = Matcher(args.all, processes, packages)
   console = Console()
+  procs = Adb.filter_pid(adb.get_processes(), processes)
   displayProcess = ProcessDisplay(matcher, console, args, procs)
   filterTag = TagFilter(args)
   colorTag = TagColor(console, args)
