@@ -28,7 +28,6 @@ import re
 import subprocess
 from time import sleep
 from subprocess import PIPE
-from colorama import init, AnsiToWin32
 
 __version__ = '3.0.0'
 
@@ -418,7 +417,7 @@ class TagColor(Filter):
     self.always_tags = args.always_tags
     c = console
 
-    self.last_used = sorted(set(c.COLORS) - set([c.BLACK, c.GRAY, c.WHITE]))
+    self.colors = sorted(set(c.COLORS) - set([c.BLACK, c.GRAY, c.WHITE]))
 
     self.known_tags = {
       'dalvikvm': c.GRAY,
@@ -447,13 +446,9 @@ class TagColor(Filter):
   def __allocate_color(self, tag):
     # this will allocate a unique format for the given tag
     # since we dont have very many colors, we always keep track of the LRU
-    if tag not in self.known_tags:
-      self.known_tags[tag] = self.last_used[0]
-    color = self.known_tags[tag]
-    if color in self.last_used:
-      self.last_used.remove(color)
-      self.last_used.append(color)
-    return color
+    if tag in self.known_tags:
+      return self.known_tags[tag]
+    return self.colors[hash(tag) % len(self.colors)]
 
   def filter(self, log_row):
     if not log_row: return None
@@ -513,9 +508,7 @@ class LogDisplay(ProcessFilter):
 
 class Console():
   def __init__(self):
-    init()
     self.isatty = sys.stdin.isatty()
-    self.cstream = AnsiToWin32(sys.stderr).stream
     self.width = -1
     try:
       # Get the current terminal width
@@ -526,9 +519,12 @@ class Console():
     except:
       pass
 
-  DARKS = range(30, 38)
-  LIGHTS = range(90, 98)
-  COLORS = sorted(set(DARKS).union(set(LIGHTS)))
+  # https://renenyffenegger.ch/notes/Linux/shell/ANSI-escape-sequences
+  DARKS = range(0x00, 0x07 + 1)
+  LIGHTS = range(0x08, 0x0F + 1)
+  CUBE666 = range(0x10 + 4, 0xE7 - 4 + 1) #except first and last, too dark/bright
+  GRAYS = range(0xE8, 0xFF + 1) #not using grayscale
+  COLORS = sorted(set(DARKS).union(set(LIGHTS)).union(set(CUBE666)))
 
   BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, GRAY = DARKS
   DARK_GRAY, L_RED, L_GREEN, L_YELLOW, L_BLUE, L_MAGENTA, L_CYAN, WHITE = LIGHTS
@@ -538,8 +534,8 @@ class Console():
   @staticmethod
   def termcolor(fg=None, bg=None):
     codes = []
-    if fg is not None: codes.append('%d' % fg)
-    if bg is not None: codes.append('%d' % (bg + 10))
+    if fg is not None: codes.append('38;5;%d' % fg)
+    if bg is not None: codes.append('48;5;%d' % bg)
     return '\033[%sm' % ';'.join(codes) if codes else ''
 
   def colorize(self, message, fg=None, bg=None):
@@ -564,7 +560,7 @@ class Console():
     return messagebuf
 
   def write(self, message):
-    print(message, file=self.cstream if self.isatty else sys.stdin)
+    print(message, file=sys.stdout)
 
 
 
